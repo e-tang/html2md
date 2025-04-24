@@ -28,9 +28,38 @@ turndownService.addRule('removeEmptyParagraphs', {
   replacement: () => ''
 });
 
-// Conversion function using TurndownService
-async function convertWithTurndown(htmlContent) {
+// Process HTML content to adjust links before conversion
+function adjustHtmlLinks(htmlContent, domain) {
   const dom = new JSDOM(htmlContent);
+  const document = dom.window.document;
+  
+  // Process all anchor links
+  const links = document.querySelectorAll('a');
+  links.forEach(link => {
+    const href = link.getAttribute('href');
+    if (href && href.startsWith('/')) {
+      link.setAttribute('href', `${domain}${href}`);
+    }
+  });
+  
+  // Process all image sources
+  const images = document.querySelectorAll('img');
+  images.forEach(img => {
+    const src = img.getAttribute('src');
+    if (src && src.startsWith('/')) {
+      img.setAttribute('src', `${domain}${src}`);
+    }
+  });
+  
+  return dom.serialize();
+}
+
+// Conversion function using TurndownService
+async function convertWithTurndown(htmlContent, domain) {
+  // Adjust links in HTML
+  const adjustedHtml = adjustHtmlLinks(htmlContent, domain);
+  
+  const dom = new JSDOM(adjustedHtml);
   const document = dom.window.document;
   
   // Use Readability to extract the main content
@@ -50,10 +79,24 @@ async function convertWithTurndown(htmlContent) {
 }
 
 // Conversion function using markitdown command-line tool
-async function convertWithMarkitdown(htmlFilePath, markdownFilePath) {
+async function convertWithMarkitdown(htmlFilePath, markdownFilePath, domain) {
   try {
-    // Execute the markitdown command
-    await execPromise(`markitdown "${htmlFilePath}" > "${markdownFilePath}"`);
+    // Read HTML content first
+    const htmlContent = await readFile(htmlFilePath, 'utf8');
+    
+    // Adjust links in HTML
+    const adjustedHtml = adjustHtmlLinks(htmlContent, domain);
+    
+    // Write adjusted HTML to a temporary file
+    const tempHtmlPath = `${htmlFilePath}.temp`;
+    await writeFile(tempHtmlPath, adjustedHtml, 'utf8');
+    
+    // Execute the markitdown command with the temp file
+    await execPromise(`markitdown "${tempHtmlPath}" > "${markdownFilePath}"`);
+    
+    // Remove the temporary file
+    fs.unlinkSync(tempHtmlPath);
+    
     return true;
   } catch (error) {
     console.error(`Error executing markitdown: ${error.message}`);
@@ -62,7 +105,9 @@ async function convertWithMarkitdown(htmlFilePath, markdownFilePath) {
 }
 
 // Function to recursively process directories
-async function processDirectory(sourceDir, targetDir, relativePath = '', useMarkitdown = false) {
+async function processDirectory(sourceDir, targetDir, relativePath = '', options = {}) {
+  const { useMarkitdown = false, domain = 'domain.com' } = options;
+  
   const currentSourceDir = path.join(sourceDir, relativePath);
   const currentTargetDir = path.join(targetDir, relativePath);
   
@@ -81,7 +126,7 @@ async function processDirectory(sourceDir, targetDir, relativePath = '', useMark
     
     if (stats.isDirectory()) {
       // Recursively process subdirectories
-      await processDirectory(sourceDir, targetDir, itemRelativePath, useMarkitdown);
+      await processDirectory(sourceDir, targetDir, itemRelativePath, options);
     } else if (stats.isFile() && path.extname(item).toLowerCase() === '.html') {
       // Process HTML files
       try {
@@ -95,11 +140,11 @@ async function processDirectory(sourceDir, targetDir, relativePath = '', useMark
         
         if (useMarkitdown) {
           // Use markitdown system command
-          await convertWithMarkitdown(sourcePath, targetPath);
+          await convertWithMarkitdown(sourcePath, targetPath, domain);
         } else {
           // Use TurndownService
           const htmlContent = await readFile(sourcePath, 'utf8');
-          const markdown = await convertWithTurndown(htmlContent);
+          const markdown = await convertWithTurndown(htmlContent, domain);
           await writeFile(targetPath, markdown, 'utf8');
         }
         
@@ -112,10 +157,13 @@ async function processDirectory(sourceDir, targetDir, relativePath = '', useMark
 }
 
 // Main function to start the conversion process
-async function convertHtmlFilesToMarkdown(sourceDir, targetDir, useMarkitdown = false) {
+async function convertHtmlFilesToMarkdown(sourceDir, targetDir, options = {}) {
   try {
+    const { useMarkitdown = false, domain = 'domain.com' } = options;
+    
     console.log(`Starting conversion from ${sourceDir} to ${targetDir}`);
     console.log(`Using ${useMarkitdown ? 'markitdown system command' : 'TurndownService'} for conversion`);
+    console.log(`Links starting with '/' will be prepended with '${domain}'`);
     
     // Create root target directory if it doesn't exist
     if (!fs.existsSync(targetDir)) {
@@ -123,7 +171,7 @@ async function convertHtmlFilesToMarkdown(sourceDir, targetDir, useMarkitdown = 
     }
     
     // Process all directories and files
-    await processDirectory(sourceDir, targetDir, '', useMarkitdown);
+    await processDirectory(sourceDir, targetDir, '', options);
     
     console.log('Conversion completed successfully!');
   } catch (error) {
@@ -137,7 +185,8 @@ function parseArgs() {
   const options = {
     sourceDir: './html_files',
     targetDir: './markdown_files',
-    useMarkitdown: false
+    useMarkitdown: false,
+    domain: 'domain.com'
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -149,6 +198,9 @@ function parseArgs() {
       i++;
     } else if (args[i] === '--use-markitdown' || args[i] === '-m') {
       options.useMarkitdown = true;
+    } else if (args[i] === '--domain' || args[i] === '-d') {
+      options.domain = args[i + 1];
+      i++;
     } else if (args[i] === '--help' || args[i] === '-h') {
       printHelp();
       process.exit(0);
@@ -164,12 +216,13 @@ function printHelp() {
 HTML to Markdown Converter
 
 Usage:
-  node converter.js [options]
+  node index.js [options]
 
 Options:
   -s, --source <dir>      Source directory containing HTML files (default: ./html_files)
   -t, --target <dir>      Target directory for Markdown files (default: ./markdown_files)
   -m, --use-markitdown    Use markitdown system command instead of TurndownService
+  -d, --domain <domain>   Domain to prepend to links starting with '/' (default: domain.com)
   -h, --help              Show this help message
   `);
 }
@@ -179,7 +232,14 @@ if (require.main === module) {
   const options = parseArgs();
   
   // Run the conversion with parsed options
-  convertHtmlFilesToMarkdown(options.sourceDir, options.targetDir, options.useMarkitdown);
+  convertHtmlFilesToMarkdown(
+    options.sourceDir, 
+    options.targetDir, 
+    {
+      useMarkitdown: options.useMarkitdown,
+      domain: options.domain
+    }
+  );
 }
 
 // Export for use as a module
