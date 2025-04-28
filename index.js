@@ -57,7 +57,7 @@ function adjustHtmlLinks(htmlContent, domain) {
 // Conversion function using TurndownService
 async function convertWithTurndown(htmlContent, domain) {
   // Adjust links in HTML
-  const adjustedHtml = adjustHtmlLinks(htmlContent, domain);
+  const adjustedHtml = domain ? adjustHtmlLinks(htmlContent, domain) : htmlContent;
   
   const dom = new JSDOM(adjustedHtml);
   const document = dom.window.document;
@@ -159,7 +159,7 @@ async function processDirectory(sourceDir, targetDir, relativePath = '', options
 // Main function to start the conversion process
 async function convertHtmlFilesToMarkdown(sourceDir, targetDir, options = {}) {
   try {
-    const { useMarkitdown = false, domain = 'domain.com' } = options;
+    const { useMarkitdown = false, domain = '' } = options;
     
     console.log(`Starting conversion from ${sourceDir} to ${targetDir}`);
     console.log(`Using ${useMarkitdown ? 'markitdown system command' : 'TurndownService'} for conversion`);
@@ -186,7 +186,7 @@ function parseArgs() {
     sourceDir: './html_files',
     targetDir: './markdown_files',
     useMarkitdown: false,
-    domain: 'domain.com'
+    domain: '', // the domain to prepend to links
   };
 
   for (let i = 0; i < args.length; i++) {
